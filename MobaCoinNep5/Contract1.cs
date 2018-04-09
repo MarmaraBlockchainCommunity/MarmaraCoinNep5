@@ -11,20 +11,12 @@ namespace MobaCoinNep5
     public class ICO_Template : SmartContract
     {
         //Token Settings
-        public static string Name() => "MobaToken v0.0.3";
-        public static string Symbol() => "MOBA";
+        public static string Name() => "MarmaraCoin v0.1.0";
+        public static string Symbol() => "MARCO";
         public static readonly byte[] Owner = "AK2nJJpJr6o664CWJKi1QRXjqeic2zRp8y".ToScriptHash();
-        public static byte Decimals() => 8;
-        private const ulong factor = 100000000; //decided by Decimals()
-        private const ulong neo_decimals = 100000000;
-
+        
         //ICO Settings
-        private static readonly byte[] neo_asset_id = { 155, 124, 255, 218, 166, 116, 190, 174, 15, 147, 14, 190, 96, 133, 175, 144, 147, 229, 254, 86, 179, 74, 92, 34, 12, 205, 207, 110, 252, 51, 111, 197 };
-        private const ulong total_amount = 100000000 * factor; // total token amount
-        private const ulong pre_ico_cap = 30000000 * factor; // pre ico token amount
-        private const ulong basic_rate = 1000 * factor;
-        private const int ico_start_time = 1506787200;
-        private const int ico_end_time = 1538323200;
+        private const ulong TotalAmount = 100000000 ; // total token amount
 
         [DisplayName("transfer")]
         public static event Action<byte[], byte[], BigInteger> Transferred;
@@ -51,7 +43,6 @@ namespace MobaCoinNep5
             else if (Runtime.Trigger == TriggerType.Application)
             {
                 if (operation == "deploy") return Deploy();
-                if (operation == "mintTokens") return MintTokens();
                 if (operation == "totalSupply") return TotalSupply();
                 if (operation == "name") return Name();
                 if (operation == "symbol") return Symbol();
@@ -69,14 +60,6 @@ namespace MobaCoinNep5
                     byte[] account = (byte[])args[0];
                     return BalanceOf(account);
                 }
-                if (operation == "decimals") return Decimals();
-            }
-            //you can choice refund or not refund
-            byte[] sender = GetSender();
-            ulong contribute_value = GetContributeValue();
-            if (contribute_value > 0 && sender.Length != 0)
-            {
-                Refund(sender, contribute_value);
             }
             return false;
         }
@@ -85,54 +68,26 @@ namespace MobaCoinNep5
         // 初始化参数
         public static bool Deploy()
         {
+            Runtime.Notify("Deploy starting...");
             byte[] total_supply = Storage.Get(Storage.CurrentContext, "totalSupply");
-            if (total_supply.Length != 0) return false;
-            Storage.Put(Storage.CurrentContext, Owner, pre_ico_cap);
-            Storage.Put(Storage.CurrentContext, "totalSupply", pre_ico_cap);
-            Transferred(null, Owner, pre_ico_cap);
+            if (total_supply.Length != 0)
+            {
+                Runtime.Notify("Deploy failed.");
+                return false;
+            }
+
+            Storage.Put(Storage.CurrentContext, Owner, TotalAmount);
+            Runtime.Notify("Balance set", Owner, TotalAmount);
+
+            var balance = Storage.Get(Storage.CurrentContext, Owner).AsBigInteger();
+            Runtime.Notify("BalanceOf", Owner, balance);
+
+            Storage.Put(Storage.CurrentContext, "totalSupply", TotalAmount);
+            Transferred(null, Owner, TotalAmount);
+            Runtime.Notify("Deployed.");
             return true;
         }
-
-        // The function MintTokens is only usable by the chosen wallet
-        // contract to mint a number of tokens proportional to the
-        // amount of neo sent to the wallet contract. The function
-        // can only be called during the tokenswap period
-        // 将众筹的neo转化为等价的ico代币
-        public static bool MintTokens()
-        {
-            byte[] sender = GetSender();
-            // contribute asset is not neo
-            if (sender.Length == 0)
-            {
-                return false;
-            }
-            ulong contribute_value = GetContributeValue();
-            // the current exchange rate between ico tokens and neo during the token swap period
-            // 获取众筹期间ico token和neo间的转化率
-            ulong swap_rate = CurrentSwapRate();
-            // crowdfunding failure
-            // 众筹失败
-            if (swap_rate == 0)
-            {
-                Refund(sender, contribute_value);
-                return false;
-            }
-            // you can get current swap token amount
-            ulong token = CurrentSwapToken(sender, contribute_value, swap_rate);
-            if (token == 0)
-            {
-                return false;
-            }
-            // crowdfunding success
-            // 众筹成功
-            BigInteger balance = Storage.Get(Storage.CurrentContext, sender).AsBigInteger();
-            Storage.Put(Storage.CurrentContext, sender, token + balance);
-            BigInteger totalSupply = Storage.Get(Storage.CurrentContext, "totalSupply").AsBigInteger();
-            Storage.Put(Storage.CurrentContext, "totalSupply", token + totalSupply);
-            Transferred(null, sender, token);
-            return true;
-        }
-
+        
         // get the total token supply
         // 获取已发行token总量
         public static BigInteger TotalSupply()
@@ -163,84 +118,10 @@ namespace MobaCoinNep5
         // 根据地址获取token的余额
         public static BigInteger BalanceOf(byte[] address)
         {
-            return Storage.Get(Storage.CurrentContext, address).AsBigInteger();
-        }
+            var balance = Storage.Get(Storage.CurrentContext, address).AsBigInteger();
+            Runtime.Notify("BalanceOf", address, balance);
 
-        // The function CurrentSwapRate() returns the current exchange rate
-        // between ico tokens and neo during the token swap period
-        private static ulong CurrentSwapRate()
-        {
-            const int ico_duration = ico_end_time - ico_start_time;
-            uint now = Blockchain.GetHeader(Blockchain.GetHeight()).Timestamp + 15;
-            int time = (int)now - ico_start_time;
-            if (time < 0)
-            {
-                return 0;
-            }
-            else if (time < ico_duration)
-            {
-                return basic_rate;
-            }
-            else
-            {
-                return 0;
-            }
-        }
-
-        //whether over contribute capacity, you can get the token amount
-        private static ulong CurrentSwapToken(byte[] sender, ulong value, ulong swap_rate)
-        {
-            ulong token = value / neo_decimals * swap_rate;
-            BigInteger total_supply = Storage.Get(Storage.CurrentContext, "totalSupply").AsBigInteger();
-            BigInteger balance_token = total_amount - total_supply;
-            if (balance_token <= 0)
-            {
-                Refund(sender, value);
-                return 0;
-            }
-            else if (balance_token < token)
-            {
-                Refund(sender, (token - balance_token) / swap_rate * neo_decimals);
-                token = (ulong)balance_token;
-            }
-            return token;
-        }
-
-        // check whether asset is neo and get sender script hash
-        private static byte[] GetSender()
-        {
-            Transaction tx = (Transaction)ExecutionEngine.ScriptContainer;
-            TransactionOutput[] reference = tx.GetReferences();
-            // you can choice refund or not refund
-            foreach (TransactionOutput output in reference)
-            {
-                if (output.AssetId == neo_asset_id) return output.ScriptHash;
-            }
-            return new byte[0];
-        }
-
-        // get smart contract script hash
-        private static byte[] GetReceiver()
-        {
-            return ExecutionEngine.ExecutingScriptHash;
-        }
-
-        // get all you contribute neo amount
-        private static ulong GetContributeValue()
-        {
-            Transaction tx = (Transaction)ExecutionEngine.ScriptContainer;
-            TransactionOutput[] outputs = tx.GetOutputs();
-            ulong value = 0;
-            // get the total amount of Neo
-            // 获取转入智能合约地址的Neo总量
-            foreach (TransactionOutput output in outputs)
-            {
-                if (output.ScriptHash == GetReceiver() && output.AssetId == neo_asset_id)
-                {
-                    value += (ulong)output.Value;
-                }
-            }
-            return value;
+            return balance;
         }
     }
 }
